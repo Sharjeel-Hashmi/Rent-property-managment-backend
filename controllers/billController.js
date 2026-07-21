@@ -1,0 +1,81 @@
+import Bill from "../models/Bill.js";
+
+// @desc Get bills (filter by property or tenant)
+export const getBills = async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.property) filter.property = req.query.property;
+    if (req.query.tenant) filter["tenants.tenant"] = req.query.tenant;
+
+    const bills = await Bill.find(filter)
+      .populate("property", "name")
+      .populate("tenants.tenant", "fullName")
+      .sort({ billDate: -1 });
+    res.json(bills);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc Get single bill
+export const getBillById = async (req, res) => {
+  try {
+    const bill = await Bill.findById(req.params.id)
+      .populate("property", "name")
+      .populate("tenants.tenant", "fullName");
+    if (!bill) return res.status(404).json({ message: "Bill not found" });
+    res.json(bill);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc Create bill (with optional attachment as base64 sent from frontend)
+export const createBill = async (req, res) => {
+  try {
+    const bill = await Bill.create(req.body);
+    res.status(201).json(bill);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc Update bill
+export const updateBill = async (req, res) => {
+  try {
+    const bill = await Bill.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true,
+    });
+    if (!bill) return res.status(404).json({ message: "Bill not found" });
+    res.json(bill);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc Delete bill
+export const deleteBill = async (req, res) => {
+  try {
+    const bill = await Bill.findById(req.params.id);
+    if (!bill) return res.status(404).json({ message: "Bill not found" });
+    await bill.deleteOne();
+    res.json({ message: "Bill deleted" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc Toggle bill paid / unpaid
+export const markBillPaid = async (req, res) => {
+  try {
+    const bill = await Bill.findById(req.params.id);
+    if (!bill) return res.status(404).json({ message: "Bill not found" });
+    bill.isPaid = !bill.isPaid;
+    bill.paidDate = bill.isPaid ? new Date() : undefined;
+    await bill.save();
+    res.json(bill);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
