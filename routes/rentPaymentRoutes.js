@@ -1,9 +1,9 @@
 import express from "express";
 import {
-  getOrCreateRentPayment,
-  getRentPaymentsForTenant,
+  getCurrentRentCycle,
+  getRentHistory,
   toggleRentPaymentStatus,
-  updateRentPayment,
+  getOverdueRentTenants,
 } from "../controllers/rentPaymentController.js";
 import protect from "../middleware/auth.js";
 
@@ -11,9 +11,9 @@ const router = express.Router();
 
 router.use(protect);
 
-router.get("/", getOrCreateRentPayment); // ?tenant=id&month=YYYY-MM
-router.get("/tenant/:tenantId", getRentPaymentsForTenant);
+router.get("/overdue", getOverdueRentTenants);
+router.get("/current/:tenantId", getCurrentRentCycle);
+router.get("/history/:tenantId", getRentHistory);
 router.put("/:id/toggle", toggleRentPaymentStatus);
-router.put("/:id", updateRentPayment);
 
 export default router;
