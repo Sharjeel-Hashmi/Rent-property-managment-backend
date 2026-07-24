@@ -34,7 +34,11 @@ export const getBillById = async (req, res) => {
 export const createBill = async (req, res) => {
   try {
     const bill = await Bill.create(req.body);
-    res.status(201).json(bill);
+    const populated = await bill.populate([
+      { path: "property", select: "name" },
+      { path: "tenants.tenant", select: "fullName" },
+    ]);
+    res.status(201).json(populated);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -46,7 +50,9 @@ export const updateBill = async (req, res) => {
     const bill = await Bill.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true,
-    });
+    })
+      .populate("property", "name")
+      .populate("tenants.tenant", "fullName");
     if (!bill) return res.status(404).json({ message: "Bill not found" });
     res.json(bill);
   } catch (error) {
@@ -66,15 +72,24 @@ export const deleteBill = async (req, res) => {
   }
 };
 
-// @desc Toggle bill paid / unpaid
-export const markBillPaid = async (req, res) => {
+// @desc Toggle a single tenant's paid/unpaid status within a bill
+export const payTenantShare = async (req, res) => {
   try {
     const bill = await Bill.findById(req.params.id);
     if (!bill) return res.status(404).json({ message: "Bill not found" });
-    bill.isPaid = !bill.isPaid;
-    bill.paidDate = bill.isPaid ? new Date() : undefined;
+
+    const share = bill.tenants.find((t) => String(t.tenant) === String(req.params.tenantId));
+    if (!share) return res.status(404).json({ message: "This tenant is not part of this bill" });
+
+    share.isPaid = !share.isPaid;
+    share.paidDate = share.isPaid ? new Date() : undefined;
+
     await bill.save();
-    res.json(bill);
+    const populated = await bill.populate([
+      { path: "property", select: "name" },
+      { path: "tenants.tenant", select: "fullName" },
+    ]);
+    res.json(populated);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

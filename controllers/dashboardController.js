@@ -17,7 +17,9 @@ export const getDashboardStats = async (req, res) => {
 
     const activeTenants = await Tenant.countDocuments({ status: "active" });
     const noticeTenants = await Tenant.countDocuments({ status: "notice-given" });
-    const unpaidBills = await Bill.countDocuments({ isPaid: false });
+    const unpaidBills = await Bill.countDocuments({
+      tenants: { $elemMatch: { isPaid: false } },
+    });
 
     const rentDueMembersCount = await RentPayment.countDocuments({
       isPaid: false,

@@ -8,16 +8,27 @@ const billSchema = new mongoose.Schema(
       enum: ["Electricity", "Gas", "Internet", "Water", "Other"],
       required: true,
     },
-    billPeriodMonth: { type: String }, // "YYYY-MM" - the calendar month this bill covers (used for proration)
+
+    // Billing period this bill covers (can span multiple months, e.g. 2-3 month bills)
+    billPeriodStart: { type: Date },
+    billPeriodEnd: { type: Date },
+
+    // How the total amount was divided among tenants
+    splitMethod: { type: String, enum: ["equal", "prorate"], default: "equal" },
+
     totalAmount: { type: Number, required: true },
     billDate: { type: Date, required: true },
     dueDate: { type: Date },
 
-    // Tenant(s) this bill applies to. If split, multiple tenants share totalAmount.
+    // Tenant(s) this bill applies to. Each tenant has their own paid status now,
+    // so partial payment (some members paid, some not) can be tracked per bill.
     tenants: [
       {
         tenant: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant" },
         shareAmount: { type: Number },
+        daysPresent: { type: Number },
+        isPaid: { type: Boolean, default: false },
+        paidDate: { type: Date },
       },
     ],
 
@@ -27,8 +38,6 @@ const billSchema = new mongoose.Schema(
       fileName: { type: String },
     },
 
-    isPaid: { type: Boolean, default: false },
-    paidDate: { type: Date },
     notes: { type: String },
   },
   { timestamps: true }

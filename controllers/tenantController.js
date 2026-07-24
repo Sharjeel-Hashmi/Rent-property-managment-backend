@@ -173,10 +173,12 @@ export const getDepositSummary = async (req, res) => {
     const unpaidRentRecords = await RentPayment.find({ tenant: tenant._id, isPaid: false });
     const unpaidRentTotal = unpaidRentRecords.reduce((sum, r) => sum + r.amount, 0);
 
-    const bills = await Bill.find({ "tenants.tenant": tenant._id, isPaid: false });
+    const bills = await Bill.find({
+      tenants: { $elemMatch: { tenant: tenant._id, isPaid: false } },
+    });
     const unpaidBillsTotal = bills.reduce((sum, bill) => {
       const share = bill.tenants.find((t) => String(t.tenant) === String(tenant._id));
-      return sum + (share?.shareAmount || 0);
+      return sum + (share && !share.isPaid ? share.shareAmount || 0 : 0);
     }, 0);
 
     const shortfallPenalty = tenant.deductionApplicable ? tenant.deductionAmount || 0 : 0;
@@ -206,10 +208,12 @@ export const moveOutTenant = async (req, res) => {
     const unpaidRentRecords = await RentPayment.find({ tenant: tenant._id, isPaid: false });
     const unpaidRentTotal = unpaidRentRecords.reduce((sum, r) => sum + r.amount, 0);
 
-    const bills = await Bill.find({ "tenants.tenant": tenant._id, isPaid: false });
+    const bills = await Bill.find({
+      tenants: { $elemMatch: { tenant: tenant._id, isPaid: false } },
+    });
     const unpaidBillsTotal = bills.reduce((sum, bill) => {
       const share = bill.tenants.find((t) => String(t.tenant) === String(tenant._id));
-      return sum + (share?.shareAmount || 0);
+      return sum + (share && !share.isPaid ? share.shareAmount || 0 : 0);
     }, 0);
 
     const shortfallPenalty = tenant.deductionApplicable ? (req.body.deductionAmount ?? tenant.deductionAmount ?? 0) : 0;

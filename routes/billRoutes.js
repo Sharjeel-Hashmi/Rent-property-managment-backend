@@ -5,7 +5,7 @@ import {
   createBill,
   updateBill,
   deleteBill,
-  markBillPaid,
+  payTenantShare,
 } from "../controllers/billController.js";
 import protect from "../middleware/auth.js";
 
@@ -15,6 +15,6 @@ router.use(protect);
 
 router.route("/").get(getBills).post(createBill);
 router.route("/:id").get(getBillById).put(updateBill).delete(deleteBill);
-router.route("/:id/pay").put(markBillPaid);
+router.route("/:id/pay/:tenantId").put(payTenantShare);
 
 export default router;
