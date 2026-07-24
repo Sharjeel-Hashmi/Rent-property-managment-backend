@@ -43,6 +43,11 @@ const tenantSchema = new mongoose.Schema(
       default: "monthly",
     },
     depositAmount: { type: Number, default: 0 },
+    depositPaid: { type: Boolean, default: false },
+    remainingDepositAmount: { type: Number }, // calculated at move-out
+
+    // Rent due cycle
+    nextRentDueDate: { type: Date },
 
     // Dates & Status
     moveInDate: { type: Date, required: true },

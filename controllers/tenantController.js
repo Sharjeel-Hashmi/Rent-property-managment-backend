@@ -1,7 +1,10 @@
 import Tenant from "../models/Tenant.js";
 import Property from "../models/Property.js";
+import RentPayment from "../models/RentPayment.js";
+import Bill from "../models/Bill.js";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
+const FIRST_DUE_GRACE_DAYS = 10;
 
 // Helper: keep room status in sync with active tenants
 const syncRoomStatus = async (propertyId) => {
@@ -19,6 +22,12 @@ const syncRoomStatus = async (propertyId) => {
   });
 
   await property.save();
+};
+
+const addMonths = (date, months) => {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
 };
 
 // @desc Get all tenants (optionally filter by property)
@@ -64,6 +73,20 @@ export const createTenant = async (req, res) => {
       );
     }
 
+    // create the first rent cycle: due 10 days after move-in
+    const firstDueDate = new Date(tenant.moveInDate);
+    firstDueDate.setDate(firstDueDate.getDate() + FIRST_DUE_GRACE_DAYS);
+
+    await RentPayment.create({
+      tenant: tenant._id,
+      property: tenant.property,
+      dueDate: firstDueDate,
+      amount: tenant.rentAmount,
+    });
+
+    tenant.nextRentDueDate = firstDueDate;
+    await tenant.save();
+
     await syncRoomStatus(tenant.property);
     res.status(201).json(tenant);
   } catch (error) {
@@ -99,6 +122,7 @@ export const deleteTenant = async (req, res) => {
     );
 
     const propertyId = tenant.property;
+    await RentPayment.deleteMany({ tenant: tenant._id });
     await tenant.deleteOne();
     await syncRoomStatus(propertyId);
 
@@ -109,10 +133,9 @@ export const deleteTenant = async (req, res) => {
 };
 
 // @desc Give notice for a tenant - calculates shortfall + deduction flag
-// Rule: required notice = 4 weeks (28 days). If the notice actually given
-// falls short of the required period by more than 15 days, a deduction
-// from the advance/deposit becomes applicable. Admin enters the final
-// deduction amount manually after review.
+// Rule: required notice = 4 weeks (28 days) starting from the notice-given date.
+// If the notice actually given falls short of the required period by more
+// than 15 days, a deduction from the advance/deposit becomes applicable.
 export const giveNotice = async (req, res) => {
   try {
     const { noticeGivenDate, plannedMoveOutDate } = req.body;
@@ -140,16 +163,64 @@ export const giveNotice = async (req, res) => {
   }
 };
 
+// @desc Calculate remaining deposit summary (used before/at move-out)
+// remainingDeposit = depositAmount - (shortfallPenalty + unpaidRentTotal + unpaidBillsTotal)
+export const getDepositSummary = async (req, res) => {
+  try {
+    const tenant = await Tenant.findById(req.params.id);
+    if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+
+    const unpaidRentRecords = await RentPayment.find({ tenant: tenant._id, isPaid: false });
+    const unpaidRentTotal = unpaidRentRecords.reduce((sum, r) => sum + r.amount, 0);
+
+    const bills = await Bill.find({ "tenants.tenant": tenant._id, isPaid: false });
+    const unpaidBillsTotal = bills.reduce((sum, bill) => {
+      const share = bill.tenants.find((t) => String(t.tenant) === String(tenant._id));
+      return sum + (share?.shareAmount || 0);
+    }, 0);
+
+    const shortfallPenalty = tenant.deductionApplicable ? tenant.deductionAmount || 0 : 0;
+
+    const totalDeductions = shortfallPenalty + unpaidRentTotal + unpaidBillsTotal;
+    const remainingDeposit = (tenant.depositAmount || 0) - totalDeductions;
+
+    res.json({
+      depositAmount: tenant.depositAmount || 0,
+      shortfallPenalty,
+      unpaidRentTotal,
+      unpaidBillsTotal,
+      totalDeductions,
+      remainingDeposit,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // @desc Finalize move-out
 export const moveOutTenant = async (req, res) => {
   try {
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) return res.status(404).json({ message: "Tenant not found" });
 
+    const unpaidRentRecords = await RentPayment.find({ tenant: tenant._id, isPaid: false });
+    const unpaidRentTotal = unpaidRentRecords.reduce((sum, r) => sum + r.amount, 0);
+
+    const bills = await Bill.find({ "tenants.tenant": tenant._id, isPaid: false });
+    const unpaidBillsTotal = bills.reduce((sum, bill) => {
+      const share = bill.tenants.find((t) => String(t.tenant) === String(tenant._id));
+      return sum + (share?.shareAmount || 0);
+    }, 0);
+
+    const shortfallPenalty = tenant.deductionApplicable ? (req.body.deductionAmount ?? tenant.deductionAmount ?? 0) : 0;
+
     tenant.status = "moved-out";
     tenant.moveOutDate = req.body.moveOutDate || new Date();
     if (req.body.deductionAmount !== undefined) tenant.deductionAmount = req.body.deductionAmount;
     if (req.body.deductionNote) tenant.deductionNote = req.body.deductionNote;
+
+    tenant.remainingDepositAmount =
+      (tenant.depositAmount || 0) - (shortfallPenalty + unpaidRentTotal + unpaidBillsTotal);
 
     await tenant.save();
     await syncRoomStatus(tenant.property);

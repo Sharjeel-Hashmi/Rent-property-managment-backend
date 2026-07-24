@@ -8,6 +8,7 @@ const billSchema = new mongoose.Schema(
       enum: ["Electricity", "Gas", "Internet", "Water", "Other"],
       required: true,
     },
+    billPeriodMonth: { type: String }, // "YYYY-MM" - the calendar month this bill covers (used for proration)
     totalAmount: { type: Number, required: true },
     billDate: { type: Date, required: true },
     dueDate: { type: Date },

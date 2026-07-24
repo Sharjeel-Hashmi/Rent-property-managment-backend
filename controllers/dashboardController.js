@@ -1,6 +1,7 @@
 import Property from "../models/Property.js";
 import Tenant from "../models/Tenant.js";
 import Bill from "../models/Bill.js";
+import RentPayment from "../models/RentPayment.js";
 
 export const getDashboardStats = async (req, res) => {
   try {
@@ -18,6 +19,11 @@ export const getDashboardStats = async (req, res) => {
     const noticeTenants = await Tenant.countDocuments({ status: "notice-given" });
     const unpaidBills = await Bill.countDocuments({ isPaid: false });
 
+    const rentDueMembersCount = await RentPayment.countDocuments({
+      isPaid: false,
+      dueDate: { $lt: new Date() },
+    });
+
     const monthlyRentAgg = await Tenant.aggregate([
       { $match: { status: { $ne: "moved-out" } } },
       { $group: { _id: null, total: { $sum: "$rentAmount" } } },
@@ -31,6 +37,7 @@ export const getDashboardStats = async (req, res) => {
       activeTenants,
       noticeTenants,
       unpaidBills,
+      rentDueMembersCount,
       totalMonthlyRent: monthlyRentAgg[0]?.total || 0,
     });
   } catch (error) {

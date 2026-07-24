@@ -11,6 +11,7 @@ import tenantRoutes from "./routes/tenantRoutes.js";
 import billRoutes from "./routes/billRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import rentPaymentRoutes from "./routes/rentPaymentRoutes.js";
+import propertyExpenseRoutes from "./routes/propertyExpenseRoutes.js";
 
 dotenv.config();
 connectDB();
@@ -31,6 +32,7 @@ app.use("/api/tenants", tenantRoutes);
 app.use("/api/bills", billRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/rent-payments", rentPaymentRoutes);
+app.use("/api/property-expenses", propertyExpenseRoutes);
 
 // 404 handler
 app.use((req, res) => {
