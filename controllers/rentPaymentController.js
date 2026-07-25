@@ -3,6 +3,7 @@ import Tenant from "../models/Tenant.js";
 
 const addMonths = (date, months) => {
   const d = new Date(date);
+  d.setHours(0, 0, 0, 0); // strip time-of-day so due dates compare/match reliably
   d.setMonth(d.getMonth() + months);
   return d;
 };
@@ -46,21 +47,27 @@ export const toggleRentPaymentStatus = async (req, res) => {
     await record.save();
 
     if (record.isPaid) {
-      const nextDueDate = addMonths(record.dueDate, 1);
-      const exists = await RentPayment.findOne({ tenant: record.tenant, dueDate: nextDueDate });
+      try {
+        const nextDueDate = addMonths(record.dueDate, 1);
+        const exists = await RentPayment.findOne({ tenant: record.tenant, dueDate: nextDueDate });
 
-      if (!exists) {
-        const tenant = await Tenant.findById(record.tenant);
-        if (tenant && tenant.status !== "moved-out") {
-          await RentPayment.create({
-            tenant: record.tenant,
-            property: record.property,
-            dueDate: nextDueDate,
-            amount: tenant.rentAmount,
-          });
-          tenant.nextRentDueDate = nextDueDate;
-          await tenant.save();
+        if (!exists) {
+          const tenant = await Tenant.findById(record.tenant);
+          if (tenant && tenant.status !== "moved-out") {
+            await RentPayment.create({
+              tenant: record.tenant,
+              property: record.property,
+              dueDate: nextDueDate,
+              amount: tenant.rentAmount,
+            });
+            tenant.nextRentDueDate = nextDueDate;
+            await tenant.save();
+          }
         }
+      } catch (nextCycleErr) {
+        // Paid status is already saved above — a hiccup creating next month's
+        // cycle (e.g. a duplicate due-date race) should not fail this request.
+        console.error("Could not auto-create next rent cycle:", nextCycleErr.message);
       }
     }
 

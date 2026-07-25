@@ -75,6 +75,7 @@ export const createTenant = async (req, res) => {
 
     // create the first rent cycle: due 10 days after move-in
     const firstDueDate = new Date(tenant.moveInDate);
+    firstDueDate.setHours(0, 0, 0, 0);
     firstDueDate.setDate(firstDueDate.getDate() + FIRST_DUE_GRACE_DAYS);
 
     await RentPayment.create({
