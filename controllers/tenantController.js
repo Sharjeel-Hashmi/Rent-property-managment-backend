@@ -4,7 +4,6 @@ import RentPayment from "../models/RentPayment.js";
 import Bill from "../models/Bill.js";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
-const FIRST_DUE_GRACE_DAYS = 10;
 
 // Helper: keep room status in sync with active tenants
 const syncRoomStatus = async (propertyId) => {
@@ -73,10 +72,10 @@ export const createTenant = async (req, res) => {
       );
     }
 
-    // create the first rent cycle: due 10 days after move-in
+    // create the first rent cycle: due exactly one month after move-in date
     const firstDueDate = new Date(tenant.moveInDate);
     firstDueDate.setHours(0, 0, 0, 0);
-    firstDueDate.setDate(firstDueDate.getDate() + FIRST_DUE_GRACE_DAYS);
+    firstDueDate.setMonth(firstDueDate.getMonth() + 1);
 
     await RentPayment.create({
       tenant: tenant._id,
