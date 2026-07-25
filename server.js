@@ -14,7 +14,7 @@ import rentPaymentRoutes from "./routes/rentPaymentRoutes.js";
 import propertyExpenseRoutes from "./routes/propertyExpenseRoutes.js";
 
 dotenv.config();
-connectDB();
+await connectDB();
 
 const app = express();
 
