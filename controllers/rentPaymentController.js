@@ -3,8 +3,8 @@ import Tenant from "../models/Tenant.js";
 
 const addMonths = (date, months) => {
   const d = new Date(date);
-  d.setHours(0, 0, 0, 0); // strip time-of-day so due dates compare/match reliably
-  d.setMonth(d.getMonth() + months);
+  d.setUTCHours(0, 0, 0, 0); // UTC midnight — same result no matter which time zone the server runs in
+  d.setUTCMonth(d.getUTCMonth() + months);
   return d;
 };
 

@@ -25,7 +25,7 @@ const syncRoomStatus = async (propertyId) => {
 
 const addMonths = (date, months) => {
   const d = new Date(date);
-  d.setMonth(d.getMonth() + months);
+  d.setUTCMonth(d.getUTCMonth() + months);
   return d;
 };
 
@@ -73,9 +73,10 @@ export const createTenant = async (req, res) => {
     }
 
     // create the first rent cycle: due exactly one month after move-in date
+    // (normalized to UTC midnight so local-dev and Vercel-prod always agree)
     const firstDueDate = new Date(tenant.moveInDate);
-    firstDueDate.setHours(0, 0, 0, 0);
-    firstDueDate.setMonth(firstDueDate.getMonth() + 1);
+    firstDueDate.setUTCHours(0, 0, 0, 0);
+    firstDueDate.setUTCMonth(firstDueDate.getUTCMonth() + 1);
 
     await RentPayment.create({
       tenant: tenant._id,
