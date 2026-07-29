@@ -164,6 +164,22 @@ export const giveNotice = async (req, res) => {
   }
 };
 
+// @desc Toggle tenant's deposit paid/unpaid status
+export const toggleDeposit = async (req, res) => {
+  try {
+    const tenant = await Tenant.findById(req.params.id);
+    if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+
+    tenant.depositPaid = !tenant.depositPaid;
+    tenant.depositPaidDate = tenant.depositPaid ? new Date() : undefined;
+
+    await tenant.save();
+    res.json(tenant);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // @desc Calculate remaining deposit summary (used before/at move-out)
 // remainingDeposit = depositAmount - (shortfallPenalty + unpaidRentTotal + unpaidBillsTotal)
 export const getDepositSummary = async (req, res) => {
