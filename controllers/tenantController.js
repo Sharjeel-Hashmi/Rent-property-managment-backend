@@ -29,6 +29,20 @@ const addMonths = (date, months) => {
   return d;
 };
 
+// Shared shortfall calculation — used both at "Give Notice" time (with the
+// planned date) and again at "Finalize Move-Out" time (with the actual
+// date), so the deduction always reflects the notice the landlord ACTUALLY
+// got, not just what was originally planned.
+const calcNoticeShortfall = (noticeGivenDate, referenceDate, requiredNoticeWeeks) => {
+  const noticeDate = new Date(noticeGivenDate);
+  const refDate = new Date(referenceDate);
+  const actualNoticeDays = Math.round((refDate - noticeDate) / MS_PER_DAY);
+  const requiredDays = (requiredNoticeWeeks || 4) * 7;
+  const shortfallDays = Math.max(requiredDays - actualNoticeDays, 0);
+  const deductionApplicable = shortfallDays > 15;
+  return { actualNoticeDays, shortfallDays, deductionApplicable };
+};
+
 // @desc Get all tenants (optionally filter by property)
 export const getTenants = async (req, res) => {
   try {
@@ -148,10 +162,11 @@ export const giveNotice = async (req, res) => {
     const noticeDate = new Date(noticeGivenDate);
     const moveOutDate = new Date(plannedMoveOutDate);
 
-    const actualNoticeDays = Math.round((moveOutDate - noticeDate) / MS_PER_DAY);
-    const requiredDays = (tenant.requiredNoticeWeeks || 4) * 7;
-    const shortfallDays = Math.max(requiredDays - actualNoticeDays, 0);
-    const deductionApplicable = shortfallDays > 15;
+    const { shortfallDays, deductionApplicable } = calcNoticeShortfall(
+      noticeDate,
+      moveOutDate,
+      tenant.requiredNoticeWeeks
+    );
 
     tenant.status = "notice-given";
     tenant.noticeGivenDate = noticeDate;
@@ -182,6 +197,33 @@ export const toggleDeposit = async (req, res) => {
   }
 };
 
+// Unpaid rent owed as of a given move-out date:
+// - A cycle that hasn't started yet (dueDate after moveOutDate) isn't
+//   charged at all — the tenant never lived in that period.
+// - A cycle the tenant lived through completely is charged in full.
+// - The one cycle the move-out date actually falls inside is PRORATED —
+//   only the days actually lived in that cycle are charged.
+const calcUnpaidRentTotal = async (tenantId, moveOutDate) => {
+  const moveOut = new Date(moveOutDate);
+  const unpaidRentRecords = await RentPayment.find({ tenant: tenantId, isPaid: false }).sort({ dueDate: 1 });
+
+  let total = 0;
+  for (const record of unpaidRentRecords) {
+    const cycleStart = new Date(record.dueDate);
+    if (cycleStart > moveOut) continue; // this rent period hadn't started yet — don't charge
+
+    const cycleEnd = addMonths(cycleStart, 1);
+    if (moveOut >= cycleEnd) {
+      total += record.amount; // tenant lived through the whole cycle
+    } else {
+      const daysInCycle = Math.round((cycleEnd - cycleStart) / MS_PER_DAY);
+      const daysLived = Math.round((moveOut - cycleStart) / MS_PER_DAY);
+      total += (record.amount * daysLived) / daysInCycle;
+    }
+  }
+  return Math.round(total * 100) / 100; // round to cents
+};
+
 // @desc Calculate remaining deposit summary (used before/at move-out)
 // remainingDeposit = depositAmount - (shortfallPenalty + unpaidRentTotal + unpaidBillsTotal)
 export const getDepositSummary = async (req, res) => {
@@ -189,8 +231,8 @@ export const getDepositSummary = async (req, res) => {
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) return res.status(404).json({ message: "Tenant not found" });
 
-    const unpaidRentRecords = await RentPayment.find({ tenant: tenant._id, isPaid: false });
-    const unpaidRentTotal = unpaidRentRecords.reduce((sum, r) => sum + r.amount, 0);
+    const moveOutCandidate = req.query.moveOutDate || tenant.plannedMoveOutDate || new Date();
+    const unpaidRentTotal = await calcUnpaidRentTotal(tenant._id, moveOutCandidate);
 
     const bills = await Bill.find({
       tenants: { $elemMatch: { tenant: tenant._id, isPaid: false } },
@@ -200,7 +242,19 @@ export const getDepositSummary = async (req, res) => {
       return sum + (share && !share.isPaid ? share.shareAmount || 0 : 0);
     }, 0);
 
-    const shortfallPenalty = tenant.deductionApplicable ? tenant.deductionAmount || 0 : 0;
+    // If a candidate move-out date is passed (used for the live preview in
+    // the Finalize Move-Out modal, before it's confirmed), recalculate the
+    // notice shortfall against THAT date instead of relying on whatever was
+    // frozen in at "Give Notice" time.
+    let deductionApplicable = tenant.deductionApplicable;
+    let noticeShortfallDays = tenant.noticeShortfallDays;
+    if (tenant.noticeGivenDate && req.query.moveOutDate) {
+      const calc = calcNoticeShortfall(tenant.noticeGivenDate, req.query.moveOutDate, tenant.requiredNoticeWeeks);
+      deductionApplicable = calc.deductionApplicable;
+      noticeShortfallDays = calc.shortfallDays;
+    }
+
+    const shortfallPenalty = deductionApplicable ? tenant.deductionAmount || 0 : 0;
 
     const totalDeductions = shortfallPenalty + unpaidRentTotal + unpaidBillsTotal;
     const remainingDeposit = (tenant.depositAmount || 0) - totalDeductions;
@@ -212,6 +266,8 @@ export const getDepositSummary = async (req, res) => {
       unpaidBillsTotal,
       totalDeductions,
       remainingDeposit,
+      deductionApplicable,
+      noticeShortfallDays,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -224,8 +280,8 @@ export const moveOutTenant = async (req, res) => {
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) return res.status(404).json({ message: "Tenant not found" });
 
-    const unpaidRentRecords = await RentPayment.find({ tenant: tenant._id, isPaid: false });
-    const unpaidRentTotal = unpaidRentRecords.reduce((sum, r) => sum + r.amount, 0);
+    const finalMoveOutDate = req.body.moveOutDate || new Date();
+    const unpaidRentTotal = await calcUnpaidRentTotal(tenant._id, finalMoveOutDate);
 
     const bills = await Bill.find({
       tenants: { $elemMatch: { tenant: tenant._id, isPaid: false } },
@@ -235,10 +291,24 @@ export const moveOutTenant = async (req, res) => {
       return sum + (share && !share.isPaid ? share.shareAmount || 0 : 0);
     }, 0);
 
-    const shortfallPenalty = tenant.deductionApplicable ? (req.body.deductionAmount ?? tenant.deductionAmount ?? 0) : 0;
+    // Recalculate the notice shortfall against the ACTUAL move-out date being
+    // confirmed here — not the frozen value from "Give Notice" time — so an
+    // earlier-than-planned (or later-than-planned) departure is judged
+    // correctly.
+    let deductionApplicable = false;
+    let noticeShortfallDays = tenant.noticeShortfallDays || 0;
+    if (tenant.noticeGivenDate) {
+      const calc = calcNoticeShortfall(tenant.noticeGivenDate, finalMoveOutDate, tenant.requiredNoticeWeeks);
+      deductionApplicable = calc.deductionApplicable;
+      noticeShortfallDays = calc.shortfallDays;
+    }
+
+    const shortfallPenalty = deductionApplicable ? (req.body.deductionAmount ?? tenant.deductionAmount ?? 0) : 0;
 
     tenant.status = "moved-out";
-    tenant.moveOutDate = req.body.moveOutDate || new Date();
+    tenant.moveOutDate = finalMoveOutDate;
+    tenant.deductionApplicable = deductionApplicable;
+    tenant.noticeShortfallDays = noticeShortfallDays;
     if (req.body.deductionAmount !== undefined) tenant.deductionAmount = req.body.deductionAmount;
     if (req.body.deductionNote) tenant.deductionNote = req.body.deductionNote;
 
