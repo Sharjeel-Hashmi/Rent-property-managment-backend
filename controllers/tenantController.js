@@ -205,6 +205,21 @@ export const getDepositSummary = async (req, res) => {
   }
 };
 
+// @desc Toggle a tenant's deposit paid / not-paid status
+export const toggleDeposit = async (req, res) => {
+  try {
+    const tenant = await Tenant.findOne({ _id: req.params.id, owner: req.admin.id });
+    if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+
+    tenant.depositPaid = !tenant.depositPaid;
+    await tenant.save();
+
+    res.json(tenant);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // @desc Finalize move-out
 export const moveOutTenant = async (req, res) => {
   try {
