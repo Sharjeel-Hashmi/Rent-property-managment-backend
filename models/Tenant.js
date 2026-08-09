@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 
 const tenantSchema = new mongoose.Schema(
   {
+    owner: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", required: true },
+
     // Personal Details
     fullName: { type: String, required: true },
     email: { type: String },

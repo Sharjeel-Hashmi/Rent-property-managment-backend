@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 const propertyExpenseSchema = new mongoose.Schema(
   {
+    owner: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", required: true },
     property: { type: mongoose.Schema.Types.ObjectId, ref: "Property", required: true },
     title: { type: String, required: true }, // e.g. Property Tax, Maintenance, Electrical Work
     detail: { type: String },

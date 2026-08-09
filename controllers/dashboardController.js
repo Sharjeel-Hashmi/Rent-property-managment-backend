@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Property from "../models/Property.js";
 import Tenant from "../models/Tenant.js";
 import Bill from "../models/Bill.js";
@@ -5,7 +6,10 @@ import RentPayment from "../models/RentPayment.js";
 
 export const getDashboardStats = async (req, res) => {
   try {
-    const properties = await Property.find();
+    const ownerId = req.admin.id;
+    const ownerObjectId = new mongoose.Types.ObjectId(ownerId);
+
+    const properties = await Property.find({ owner: ownerId });
     const totalProperties = properties.length;
 
     let totalRooms = 0;
@@ -15,19 +19,21 @@ export const getDashboardStats = async (req, res) => {
       occupiedRooms += p.rooms.filter((r) => r.status === "occupied").length;
     });
 
-    const activeTenants = await Tenant.countDocuments({ status: "active" });
-    const noticeTenants = await Tenant.countDocuments({ status: "notice-given" });
+    const activeTenants = await Tenant.countDocuments({ owner: ownerId, status: "active" });
+    const noticeTenants = await Tenant.countDocuments({ owner: ownerId, status: "notice-given" });
     const unpaidBills = await Bill.countDocuments({
+      owner: ownerId,
       tenants: { $elemMatch: { isPaid: false } },
     });
 
     const rentDueMembersCount = await RentPayment.countDocuments({
+      owner: ownerId,
       isPaid: false,
       dueDate: { $lt: new Date() },
     });
 
     const monthlyRentAgg = await Tenant.aggregate([
-      { $match: { status: { $ne: "moved-out" } } },
+      { $match: { owner: ownerObjectId, status: { $ne: "moved-out" } } },
       { $group: { _id: null, total: { $sum: "$rentAmount" } } },
     ]);
 

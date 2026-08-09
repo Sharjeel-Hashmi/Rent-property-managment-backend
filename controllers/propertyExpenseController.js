@@ -1,9 +1,9 @@
 import PropertyExpense from "../models/PropertyExpense.js";
 
-// @desc Get expenses (optionally filter by property)
+// @desc Get expenses (optionally filter by property) — this admin's own only
 export const getExpenses = async (req, res) => {
   try {
-    const filter = {};
+    const filter = { owner: req.admin.id };
     if (req.query.property) filter.property = req.query.property;
 
     const expenses = await PropertyExpense.find(filter)
@@ -19,7 +19,7 @@ export const getExpenses = async (req, res) => {
 // @desc Get single expense
 export const getExpenseById = async (req, res) => {
   try {
-    const expense = await PropertyExpense.findById(req.params.id)
+    const expense = await PropertyExpense.findOne({ _id: req.params.id, owner: req.admin.id })
       .populate("property", "name")
       .populate("splitBetween.tenant", "fullName");
     if (!expense) return res.status(404).json({ message: "Expense not found" });
@@ -44,6 +44,7 @@ export const createExpense = async (req, res) => {
     const expense = await PropertyExpense.create({
       ...rest,
       amount,
+      owner: req.admin.id,
       splitBetween: splitPayload,
     });
     res.status(201).json(expense);
@@ -55,7 +56,7 @@ export const createExpense = async (req, res) => {
 // @desc Update expense
 export const updateExpense = async (req, res) => {
   try {
-    const { splitBetween, amount, ...rest } = req.body;
+    const { splitBetween, amount, owner, ...rest } = req.body;
     const updateData = { ...rest, amount };
 
     if (Array.isArray(splitBetween)) {
@@ -65,10 +66,11 @@ export const updateExpense = async (req, res) => {
       updateData.splitBetween = splitBetween.map((tenantId) => ({ tenant: tenantId, shareAmount }));
     }
 
-    const expense = await PropertyExpense.findByIdAndUpdate(req.params.id, updateData, {
-      new: true,
-      runValidators: true,
-    });
+    const expense = await PropertyExpense.findOneAndUpdate(
+      { _id: req.params.id, owner: req.admin.id },
+      updateData,
+      { new: true, runValidators: true }
+    );
     if (!expense) return res.status(404).json({ message: "Expense not found" });
     res.json(expense);
   } catch (error) {
@@ -79,7 +81,7 @@ export const updateExpense = async (req, res) => {
 // @desc Delete expense
 export const deleteExpense = async (req, res) => {
   try {
-    const expense = await PropertyExpense.findById(req.params.id);
+    const expense = await PropertyExpense.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!expense) return res.status(404).json({ message: "Expense not found" });
     await expense.deleteOne();
     res.json({ message: "Expense deleted" });

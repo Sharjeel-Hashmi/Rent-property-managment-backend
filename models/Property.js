@@ -13,6 +13,7 @@ const roomSchema = new mongoose.Schema({
 
 const propertySchema = new mongoose.Schema(
   {
+    owner: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", required: true },
     name: { type: String, required: true },
     address: { type: String, required: true },
     county: { type: String },

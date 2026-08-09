@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 const billSchema = new mongoose.Schema(
   {
+    owner: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", required: true },
     property: { type: mongoose.Schema.Types.ObjectId, ref: "Property", required: true },
     billType: {
       type: String,

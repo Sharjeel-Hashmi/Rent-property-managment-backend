@@ -5,13 +5,15 @@ import Bill from "../models/Bill.js";
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
-// Helper: keep room status in sync with active tenants
-const syncRoomStatus = async (propertyId) => {
-  const property = await Property.findById(propertyId);
+// Helper: keep room status in sync with active tenants (propertyId is already
+// known to belong to the calling admin because it came from an owner-scoped tenant/property)
+const syncRoomStatus = async (propertyId, ownerId) => {
+  const property = await Property.findOne({ _id: propertyId, owner: ownerId });
   if (!property) return;
 
   const activeTenants = await Tenant.find({
     property: propertyId,
+    owner: ownerId,
     status: { $ne: "moved-out" },
   });
 
@@ -25,28 +27,14 @@ const syncRoomStatus = async (propertyId) => {
 
 const addMonths = (date, months) => {
   const d = new Date(date);
-  d.setUTCMonth(d.getUTCMonth() + months);
+  d.setMonth(d.getMonth() + months);
   return d;
 };
 
-// Shared shortfall calculation — used both at "Give Notice" time (with the
-// planned date) and again at "Finalize Move-Out" time (with the actual
-// date), so the deduction always reflects the notice the landlord ACTUALLY
-// got, not just what was originally planned.
-const calcNoticeShortfall = (noticeGivenDate, referenceDate, requiredNoticeWeeks) => {
-  const noticeDate = new Date(noticeGivenDate);
-  const refDate = new Date(referenceDate);
-  const actualNoticeDays = Math.round((refDate - noticeDate) / MS_PER_DAY);
-  const requiredDays = (requiredNoticeWeeks || 4) * 7;
-  const shortfallDays = Math.max(requiredDays - actualNoticeDays, 0);
-  const deductionApplicable = shortfallDays > 15;
-  return { actualNoticeDays, shortfallDays, deductionApplicable };
-};
-
-// @desc Get all tenants (optionally filter by property)
+// @desc Get all tenants (optionally filter by property) — this admin's own only
 export const getTenants = async (req, res) => {
   try {
-    const filter = {};
+    const filter = { owner: req.admin.id };
     if (req.query.property) filter.property = req.query.property;
     if (req.query.status) filter.status = req.query.status;
 
@@ -63,7 +51,7 @@ export const getTenants = async (req, res) => {
 // @desc Get single tenant
 export const getTenantById = async (req, res) => {
   try {
-    const tenant = await Tenant.findById(req.params.id)
+    const tenant = await Tenant.findOne({ _id: req.params.id, owner: req.admin.id })
       .populate("property")
       .populate("sharingWith", "fullName");
     if (!tenant) return res.status(404).json({ message: "Tenant not found" });
@@ -76,35 +64,33 @@ export const getTenantById = async (req, res) => {
 // @desc Create tenant
 export const createTenant = async (req, res) => {
   try {
-    const tenant = await Tenant.create(req.body);
+    const tenant = await Tenant.create({ ...req.body, owner: req.admin.id });
 
-    // if sharing a room, link back to the other tenant(s)
+    // if sharing a room, link back to the other tenant(s) (same admin's tenants only)
     if (tenant.sharingWith?.length) {
       await Tenant.updateMany(
-        { _id: { $in: tenant.sharingWith } },
+        { _id: { $in: tenant.sharingWith }, owner: req.admin.id },
         { $addToSet: { sharingWith: tenant._id } }
       );
     }
 
-    // create two rent cycles up front:
-    // 1) move-in month's rent — due right on the move-in date itself
-    // 2) the following month's rent — due exactly one month after move-in
-    // (normalized to UTC midnight so local-dev and Vercel-prod always agree)
-    const moveInDueDate = new Date(tenant.moveInDate);
-    moveInDueDate.setUTCHours(0, 0, 0, 0);
+    // create the first rent cycle: due exactly one month after move-in date
+    const firstDueDate = new Date(tenant.moveInDate);
+    firstDueDate.setHours(0, 0, 0, 0);
+    firstDueDate.setMonth(firstDueDate.getMonth() + 1);
 
-    const nextDueDate = new Date(moveInDueDate);
-    nextDueDate.setUTCMonth(nextDueDate.getUTCMonth() + 1);
+    await RentPayment.create({
+      owner: req.admin.id,
+      tenant: tenant._id,
+      property: tenant.property,
+      dueDate: firstDueDate,
+      amount: tenant.rentAmount,
+    });
 
-    await RentPayment.create([
-      { tenant: tenant._id, property: tenant.property, dueDate: moveInDueDate, amount: tenant.rentAmount },
-      { tenant: tenant._id, property: tenant.property, dueDate: nextDueDate, amount: tenant.rentAmount },
-    ]);
-
-    tenant.nextRentDueDate = moveInDueDate;
+    tenant.nextRentDueDate = firstDueDate;
     await tenant.save();
 
-    await syncRoomStatus(tenant.property);
+    await syncRoomStatus(tenant.property, req.admin.id);
     res.status(201).json(tenant);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -114,13 +100,15 @@ export const createTenant = async (req, res) => {
 // @desc Update tenant
 export const updateTenant = async (req, res) => {
   try {
-    const tenant = await Tenant.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const { owner, ...updateData } = req.body;
+    const tenant = await Tenant.findOneAndUpdate(
+      { _id: req.params.id, owner: req.admin.id },
+      updateData,
+      { new: true, runValidators: true }
+    );
     if (!tenant) return res.status(404).json({ message: "Tenant not found" });
 
-    await syncRoomStatus(tenant.property);
+    await syncRoomStatus(tenant.property, req.admin.id);
     res.json(tenant);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -130,18 +118,18 @@ export const updateTenant = async (req, res) => {
 // @desc Delete tenant
 export const deleteTenant = async (req, res) => {
   try {
-    const tenant = await Tenant.findById(req.params.id);
+    const tenant = await Tenant.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!tenant) return res.status(404).json({ message: "Tenant not found" });
 
     await Tenant.updateMany(
-      { sharingWith: tenant._id },
+      { sharingWith: tenant._id, owner: req.admin.id },
       { $pull: { sharingWith: tenant._id } }
     );
 
     const propertyId = tenant.property;
-    await RentPayment.deleteMany({ tenant: tenant._id });
+    await RentPayment.deleteMany({ tenant: tenant._id, owner: req.admin.id });
     await tenant.deleteOne();
-    await syncRoomStatus(propertyId);
+    await syncRoomStatus(propertyId, req.admin.id);
 
     res.json({ message: "Tenant deleted" });
   } catch (error) {
@@ -156,17 +144,16 @@ export const deleteTenant = async (req, res) => {
 export const giveNotice = async (req, res) => {
   try {
     const { noticeGivenDate, plannedMoveOutDate } = req.body;
-    const tenant = await Tenant.findById(req.params.id);
+    const tenant = await Tenant.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!tenant) return res.status(404).json({ message: "Tenant not found" });
 
     const noticeDate = new Date(noticeGivenDate);
     const moveOutDate = new Date(plannedMoveOutDate);
 
-    const { shortfallDays, deductionApplicable } = calcNoticeShortfall(
-      noticeDate,
-      moveOutDate,
-      tenant.requiredNoticeWeeks
-    );
+    const actualNoticeDays = Math.round((moveOutDate - noticeDate) / MS_PER_DAY);
+    const requiredDays = (tenant.requiredNoticeWeeks || 4) * 7;
+    const shortfallDays = Math.max(requiredDays - actualNoticeDays, 0);
+    const deductionApplicable = shortfallDays > 15;
 
     tenant.status = "notice-given";
     tenant.noticeGivenDate = noticeDate;
@@ -181,60 +168,18 @@ export const giveNotice = async (req, res) => {
   }
 };
 
-// @desc Toggle tenant's deposit paid/unpaid status
-export const toggleDeposit = async (req, res) => {
-  try {
-    const tenant = await Tenant.findById(req.params.id);
-    if (!tenant) return res.status(404).json({ message: "Tenant not found" });
-
-    tenant.depositPaid = !tenant.depositPaid;
-    tenant.depositPaidDate = tenant.depositPaid ? new Date() : undefined;
-
-    await tenant.save();
-    res.json(tenant);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Unpaid rent owed as of a given move-out date:
-// - A cycle that hasn't started yet (dueDate after moveOutDate) isn't
-//   charged at all — the tenant never lived in that period.
-// - A cycle the tenant lived through completely is charged in full.
-// - The one cycle the move-out date actually falls inside is PRORATED —
-//   only the days actually lived in that cycle are charged.
-const calcUnpaidRentTotal = async (tenantId, moveOutDate) => {
-  const moveOut = new Date(moveOutDate);
-  const unpaidRentRecords = await RentPayment.find({ tenant: tenantId, isPaid: false }).sort({ dueDate: 1 });
-
-  let total = 0;
-  for (const record of unpaidRentRecords) {
-    const cycleStart = new Date(record.dueDate);
-    if (cycleStart > moveOut) continue; // this rent period hadn't started yet — don't charge
-
-    const cycleEnd = addMonths(cycleStart, 1);
-    if (moveOut >= cycleEnd) {
-      total += record.amount; // tenant lived through the whole cycle
-    } else {
-      const daysInCycle = Math.round((cycleEnd - cycleStart) / MS_PER_DAY);
-      const daysLived = Math.round((moveOut - cycleStart) / MS_PER_DAY);
-      total += (record.amount * daysLived) / daysInCycle;
-    }
-  }
-  return Math.round(total * 100) / 100; // round to cents
-};
-
 // @desc Calculate remaining deposit summary (used before/at move-out)
 // remainingDeposit = depositAmount - (shortfallPenalty + unpaidRentTotal + unpaidBillsTotal)
 export const getDepositSummary = async (req, res) => {
   try {
-    const tenant = await Tenant.findById(req.params.id);
+    const tenant = await Tenant.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!tenant) return res.status(404).json({ message: "Tenant not found" });
 
-    const moveOutCandidate = req.query.moveOutDate || tenant.plannedMoveOutDate || new Date();
-    const unpaidRentTotal = await calcUnpaidRentTotal(tenant._id, moveOutCandidate);
+    const unpaidRentRecords = await RentPayment.find({ tenant: tenant._id, owner: req.admin.id, isPaid: false });
+    const unpaidRentTotal = unpaidRentRecords.reduce((sum, r) => sum + r.amount, 0);
 
     const bills = await Bill.find({
+      owner: req.admin.id,
       tenants: { $elemMatch: { tenant: tenant._id, isPaid: false } },
     });
     const unpaidBillsTotal = bills.reduce((sum, bill) => {
@@ -242,19 +187,7 @@ export const getDepositSummary = async (req, res) => {
       return sum + (share && !share.isPaid ? share.shareAmount || 0 : 0);
     }, 0);
 
-    // If a candidate move-out date is passed (used for the live preview in
-    // the Finalize Move-Out modal, before it's confirmed), recalculate the
-    // notice shortfall against THAT date instead of relying on whatever was
-    // frozen in at "Give Notice" time.
-    let deductionApplicable = tenant.deductionApplicable;
-    let noticeShortfallDays = tenant.noticeShortfallDays;
-    if (tenant.noticeGivenDate && req.query.moveOutDate) {
-      const calc = calcNoticeShortfall(tenant.noticeGivenDate, req.query.moveOutDate, tenant.requiredNoticeWeeks);
-      deductionApplicable = calc.deductionApplicable;
-      noticeShortfallDays = calc.shortfallDays;
-    }
-
-    const shortfallPenalty = deductionApplicable ? tenant.deductionAmount || 0 : 0;
+    const shortfallPenalty = tenant.deductionApplicable ? tenant.deductionAmount || 0 : 0;
 
     const totalDeductions = shortfallPenalty + unpaidRentTotal + unpaidBillsTotal;
     const remainingDeposit = (tenant.depositAmount || 0) - totalDeductions;
@@ -266,8 +199,6 @@ export const getDepositSummary = async (req, res) => {
       unpaidBillsTotal,
       totalDeductions,
       remainingDeposit,
-      deductionApplicable,
-      noticeShortfallDays,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -277,13 +208,14 @@ export const getDepositSummary = async (req, res) => {
 // @desc Finalize move-out
 export const moveOutTenant = async (req, res) => {
   try {
-    const tenant = await Tenant.findById(req.params.id);
+    const tenant = await Tenant.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!tenant) return res.status(404).json({ message: "Tenant not found" });
 
-    const finalMoveOutDate = req.body.moveOutDate || new Date();
-    const unpaidRentTotal = await calcUnpaidRentTotal(tenant._id, finalMoveOutDate);
+    const unpaidRentRecords = await RentPayment.find({ tenant: tenant._id, owner: req.admin.id, isPaid: false });
+    const unpaidRentTotal = unpaidRentRecords.reduce((sum, r) => sum + r.amount, 0);
 
     const bills = await Bill.find({
+      owner: req.admin.id,
       tenants: { $elemMatch: { tenant: tenant._id, isPaid: false } },
     });
     const unpaidBillsTotal = bills.reduce((sum, bill) => {
@@ -291,24 +223,10 @@ export const moveOutTenant = async (req, res) => {
       return sum + (share && !share.isPaid ? share.shareAmount || 0 : 0);
     }, 0);
 
-    // Recalculate the notice shortfall against the ACTUAL move-out date being
-    // confirmed here — not the frozen value from "Give Notice" time — so an
-    // earlier-than-planned (or later-than-planned) departure is judged
-    // correctly.
-    let deductionApplicable = false;
-    let noticeShortfallDays = tenant.noticeShortfallDays || 0;
-    if (tenant.noticeGivenDate) {
-      const calc = calcNoticeShortfall(tenant.noticeGivenDate, finalMoveOutDate, tenant.requiredNoticeWeeks);
-      deductionApplicable = calc.deductionApplicable;
-      noticeShortfallDays = calc.shortfallDays;
-    }
-
-    const shortfallPenalty = deductionApplicable ? (req.body.deductionAmount ?? tenant.deductionAmount ?? 0) : 0;
+    const shortfallPenalty = tenant.deductionApplicable ? (req.body.deductionAmount ?? tenant.deductionAmount ?? 0) : 0;
 
     tenant.status = "moved-out";
-    tenant.moveOutDate = finalMoveOutDate;
-    tenant.deductionApplicable = deductionApplicable;
-    tenant.noticeShortfallDays = noticeShortfallDays;
+    tenant.moveOutDate = req.body.moveOutDate || new Date();
     if (req.body.deductionAmount !== undefined) tenant.deductionAmount = req.body.deductionAmount;
     if (req.body.deductionNote) tenant.deductionNote = req.body.deductionNote;
 
@@ -316,7 +234,7 @@ export const moveOutTenant = async (req, res) => {
       (tenant.depositAmount || 0) - (shortfallPenalty + unpaidRentTotal + unpaidBillsTotal);
 
     await tenant.save();
-    await syncRoomStatus(tenant.property);
+    await syncRoomStatus(tenant.property, req.admin.id);
     res.json(tenant);
   } catch (error) {
     res.status(500).json({ message: error.message });

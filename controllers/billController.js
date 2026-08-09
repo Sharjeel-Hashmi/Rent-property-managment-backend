@@ -1,9 +1,9 @@
 import Bill from "../models/Bill.js";
 
-// @desc Get bills (filter by property or tenant)
+// @desc Get bills (filter by property or tenant) — this admin's own only
 export const getBills = async (req, res) => {
   try {
-    const filter = {};
+    const filter = { owner: req.admin.id };
     if (req.query.property) filter.property = req.query.property;
     if (req.query.tenant) filter["tenants.tenant"] = req.query.tenant;
 
@@ -20,7 +20,7 @@ export const getBills = async (req, res) => {
 // @desc Get single bill
 export const getBillById = async (req, res) => {
   try {
-    const bill = await Bill.findById(req.params.id)
+    const bill = await Bill.findOne({ _id: req.params.id, owner: req.admin.id })
       .populate("property", "name")
       .populate("tenants.tenant", "fullName");
     if (!bill) return res.status(404).json({ message: "Bill not found" });
@@ -33,7 +33,7 @@ export const getBillById = async (req, res) => {
 // @desc Create bill (with optional attachment as base64 sent from frontend)
 export const createBill = async (req, res) => {
   try {
-    const bill = await Bill.create(req.body);
+    const bill = await Bill.create({ ...req.body, owner: req.admin.id });
     const populated = await bill.populate([
       { path: "property", select: "name" },
       { path: "tenants.tenant", select: "fullName" },
@@ -47,10 +47,12 @@ export const createBill = async (req, res) => {
 // @desc Update bill
 export const updateBill = async (req, res) => {
   try {
-    const bill = await Bill.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    })
+    const { owner, ...updateData } = req.body;
+    const bill = await Bill.findOneAndUpdate(
+      { _id: req.params.id, owner: req.admin.id },
+      updateData,
+      { new: true, runValidators: true }
+    )
       .populate("property", "name")
       .populate("tenants.tenant", "fullName");
     if (!bill) return res.status(404).json({ message: "Bill not found" });
@@ -63,7 +65,7 @@ export const updateBill = async (req, res) => {
 // @desc Delete bill
 export const deleteBill = async (req, res) => {
   try {
-    const bill = await Bill.findById(req.params.id);
+    const bill = await Bill.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!bill) return res.status(404).json({ message: "Bill not found" });
     await bill.deleteOne();
     res.json({ message: "Bill deleted" });
@@ -75,7 +77,7 @@ export const deleteBill = async (req, res) => {
 // @desc Toggle a single tenant's paid/unpaid status within a bill
 export const payTenantShare = async (req, res) => {
   try {
-    const bill = await Bill.findById(req.params.id);
+    const bill = await Bill.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!bill) return res.status(404).json({ message: "Bill not found" });
 
     const share = bill.tenants.find((t) => String(t.tenant) === String(req.params.tenantId));

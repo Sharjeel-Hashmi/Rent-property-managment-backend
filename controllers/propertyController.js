@@ -1,10 +1,10 @@
 import Property from "../models/Property.js";
 import Tenant from "../models/Tenant.js";
 
-// @desc Get all properties
+// @desc Get all properties (this admin's own only)
 export const getProperties = async (req, res) => {
   try {
-    const properties = await Property.find().sort({ createdAt: -1 });
+    const properties = await Property.find({ owner: req.admin.id }).sort({ createdAt: -1 });
     res.json(properties);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -14,10 +14,10 @@ export const getProperties = async (req, res) => {
 // @desc Get single property with its rooms + tenants
 export const getPropertyById = async (req, res) => {
   try {
-    const property = await Property.findById(req.params.id);
+    const property = await Property.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!property) return res.status(404).json({ message: "Property not found" });
 
-    const tenants = await Tenant.find({ property: property._id }).sort({ createdAt: -1 });
+    const tenants = await Tenant.find({ property: property._id, owner: req.admin.id }).sort({ createdAt: -1 });
 
     res.json({ property, tenants });
   } catch (error) {
@@ -28,7 +28,7 @@ export const getPropertyById = async (req, res) => {
 // @desc Create property
 export const createProperty = async (req, res) => {
   try {
-    const property = await Property.create(req.body);
+    const property = await Property.create({ ...req.body, owner: req.admin.id });
     res.status(201).json(property);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -38,10 +38,12 @@ export const createProperty = async (req, res) => {
 // @desc Update property
 export const updateProperty = async (req, res) => {
   try {
-    const property = await Property.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const { owner, ...updateData } = req.body;
+    const property = await Property.findOneAndUpdate(
+      { _id: req.params.id, owner: req.admin.id },
+      updateData,
+      { new: true, runValidators: true }
+    );
     if (!property) return res.status(404).json({ message: "Property not found" });
     res.json(property);
   } catch (error) {
@@ -52,11 +54,12 @@ export const updateProperty = async (req, res) => {
 // @desc Delete property
 export const deleteProperty = async (req, res) => {
   try {
-    const property = await Property.findById(req.params.id);
+    const property = await Property.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!property) return res.status(404).json({ message: "Property not found" });
 
     const tenantCount = await Tenant.countDocuments({
       property: property._id,
+      owner: req.admin.id,
       status: { $ne: "moved-out" },
     });
     if (tenantCount > 0) {
@@ -75,7 +78,7 @@ export const deleteProperty = async (req, res) => {
 // @desc Add a room to a property
 export const addRoom = async (req, res) => {
   try {
-    const property = await Property.findById(req.params.id);
+    const property = await Property.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!property) return res.status(404).json({ message: "Property not found" });
 
     property.rooms.push(req.body);
@@ -90,7 +93,7 @@ export const addRoom = async (req, res) => {
 // @desc Update a room
 export const updateRoom = async (req, res) => {
   try {
-    const property = await Property.findById(req.params.id);
+    const property = await Property.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!property) return res.status(404).json({ message: "Property not found" });
 
     const room = property.rooms.id(req.params.roomId);
@@ -107,7 +110,7 @@ export const updateRoom = async (req, res) => {
 // @desc Delete a room
 export const deleteRoom = async (req, res) => {
   try {
-    const property = await Property.findById(req.params.id);
+    const property = await Property.findOne({ _id: req.params.id, owner: req.admin.id });
     if (!property) return res.status(404).json({ message: "Property not found" });
 
     property.rooms.pull({ _id: req.params.roomId });
