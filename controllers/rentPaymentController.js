@@ -85,7 +85,7 @@ export const getOverdueRentTenants = async (req, res) => {
     const overdueRecords = await RentPayment.find({ owner: req.admin.id, isPaid: false, dueDate: { $lt: today } })
       .populate({
         path: "tenant",
-        select: "fullName phone status",
+        select: "fullName phone email status",
         match: { status: { $ne: "moved-out" } },
       })
       .populate("property", "name")
