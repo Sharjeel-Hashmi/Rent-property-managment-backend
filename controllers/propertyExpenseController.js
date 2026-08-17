@@ -5,6 +5,9 @@ export const getExpenses = async (req, res) => {
   try {
     const filter = { owner: req.admin.id };
     if (req.query.property) filter.property = req.query.property;
+    if (req.query.start && req.query.end) {
+      filter.date = { $gte: new Date(req.query.start), $lt: new Date(req.query.end) };
+    }
 
     const expenses = await PropertyExpense.find(filter)
       .populate("property", "name")

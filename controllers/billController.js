@@ -6,6 +6,9 @@ export const getBills = async (req, res) => {
     const filter = { owner: req.admin.id };
     if (req.query.property) filter.property = req.query.property;
     if (req.query.tenant) filter["tenants.tenant"] = req.query.tenant;
+    if (req.query.start && req.query.end) {
+      filter.billDate = { $gte: new Date(req.query.start), $lt: new Date(req.query.end) };
+    }
 
     const bills = await Bill.find(filter)
       .populate("property", "name")

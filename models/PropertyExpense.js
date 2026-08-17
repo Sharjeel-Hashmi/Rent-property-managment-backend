@@ -4,6 +4,7 @@ const propertyExpenseSchema = new mongoose.Schema(
   {
     owner: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", required: true },
     property: { type: mongoose.Schema.Types.ObjectId, ref: "Property", required: true },
+    category: { type: String, required: true }, // e.g. Plumbing, Heating, Electrical, or a custom category
     title: { type: String, required: true }, // e.g. Property Tax, Maintenance, Electrical Work
     detail: { type: String },
     amount: { type: Number, required: true },

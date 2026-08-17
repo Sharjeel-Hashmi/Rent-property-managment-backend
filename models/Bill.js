@@ -6,7 +6,6 @@ const billSchema = new mongoose.Schema(
     property: { type: mongoose.Schema.Types.ObjectId, ref: "Property", required: true },
     billType: {
       type: String,
-      enum: ["Electricity", "Gas", "Internet", "Water", "Other"],
       required: true,
     },
 
